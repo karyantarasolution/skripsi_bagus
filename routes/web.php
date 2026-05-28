@@ -47,28 +47,33 @@ Route::middleware(['auth', 'role:super_admin'])->prefix('superadmin')->name('sup
 });
 
 Route::middleware(['auth', 'role:admin_jaringan'])->prefix('adminjaringan')->name('adminjaringan.')->group(function () {
-    // Route lainnya...
     Route::get('/dashboard', [AdminJaringanController::class, 'dashboard'])->name('dashboard');
     Route::get('/live-traffic', [AdminJaringanController::class, 'liveTraffic'])->name('traffic');
     Route::get('/log-intrusi', [AdminJaringanController::class, 'logIntrusi'])->name('log');
 
-    // --- BAGIAN INI YANG HARUS ADA ---
-    // Untuk nampilin halaman Action
     Route::get('/action', [AdminJaringanController::class, 'action'])->name('action');
-    
-    // Untuk memproses form Action (Gunakan POST)
     Route::post('/action/process', [AdminJaringanController::class, 'processAction'])->name('action.process');
-    // ---------------------------------
 
+    // Laporan utama
     Route::get('/laporan', [AdminJaringanController::class, 'laporanMenu'])->name('laporan');
-Route::get('/laporan/cetak/{tipe}', [AdminJaringanController::class, 'cetakLaporan'])->name('laporan.cetak');
+    Route::get('/laporan/cetak/{tipe}', [AdminJaringanController::class, 'cetakLaporan'])->name('laporan.cetak');
+
+    // Laporan Analitik Statistik Anomali
+    Route::get('/laporan-analitik', [AdminJaringanController::class, 'laporanAnalitik'])->name('laporan.analitik');
+    Route::get('/laporan-analitik/cetak', [AdminJaringanController::class, 'cetakLaporanAnalitik'])->name('laporan.analitik.cetak');
+
+    // Log Penanganan Insiden
+    Route::get('/log-penanganan', [AdminJaringanController::class, 'logPenanganan'])->name('log.penanganan');
+    Route::get('/log-penanganan/cetak', [AdminJaringanController::class, 'cetakLogPenanganan'])->name('log.penanganan.cetak');
+
+    // Laporan Ketersediaan Infrastruktur
+    Route::get('/laporan-ketersediaan', [AdminJaringanController::class, 'laporanKetersediaan'])->name('laporan.ketersediaan');
+    Route::get('/laporan-ketersediaan/cetak', [AdminJaringanController::class, 'cetakLaporanKetersediaan'])->name('laporan.ketersediaan.cetak');
 });
 
-Route::prefix('manajemen')->group(function () {
-    Route::get('/dashboard', [ManajemenController::class, 'dashboard'])->name('manajemen.dashboard');
-    Route::get('/laporan', [ManajemenController::class, 'downloadLaporan'])->name('manajemen.laporan');
-    
-    // Route cetak PDF khusus manajemen
-    Route::get('/laporan/cetak/{tipe}', [ManajemenController::class, 'cetakLaporan'])->name('manajemen.laporan.cetak');
+Route::middleware(['auth', 'role:manajemen'])->prefix('manajemen')->name('manajemen.')->group(function () {
+    Route::get('/dashboard', [ManajemenController::class, 'dashboard'])->name('dashboard');
+    Route::get('/laporan', [ManajemenController::class, 'downloadLaporan'])->name('laporan');
+    Route::get('/laporan/cetak/{tipe}', [ManajemenController::class, 'cetakLaporan'])->name('laporan.cetak');
 });
 require __DIR__.'/auth.php';
