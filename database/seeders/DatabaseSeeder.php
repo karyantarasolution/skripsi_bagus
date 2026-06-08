@@ -11,8 +11,9 @@ class DatabaseSeeder extends Seeder
         $this->call([
             UserSeeder::class,
             RuleSeeder::class,
+            SettingSeeder::class,
             AttackLogSeeder::class,
-    // Tambahkan seeder lain di sini jika ad    ]);
+            ManualActionSeeder::class,
         ]);
     }
 }
