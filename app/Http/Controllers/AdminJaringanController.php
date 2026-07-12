@@ -6,9 +6,11 @@ use App\Models\AttackLog;
 use App\Models\Rule;
 use Illuminate\Http\Request;
 use App\Models\ManualAction;
+use App\Models\Setting;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Carbon\Carbon;
 use DB;
+use App\Services\NetworkScanner;
 
 class AdminJaringanController extends Controller
 {
@@ -29,24 +31,110 @@ class AdminJaringanController extends Controller
             ->orderBy('date', 'ASC')
             ->get();
 
-        // Ambil 5 serangan terbaru untuk ditampilkan
         $recentAttacks = AttackLog::latest()->take(5)->get();
 
-        // Hitung risk level distribution
         $riskDistribution = AttackLog::select('risk_level', DB::raw('count(*) as total'))
             ->groupBy('risk_level')
             ->get();
 
+        $scanner = app(NetworkScanner::class);
+        $networkInfo = $scanner->getNetworkInfo();
+
         return view('adminjaringan.dashboard', compact(
             'totalSerangan', 'totalBlocked', 'totalRules', 'todayAttacks',
-            'kategoriData', 'trenSerangan', 'recentAttacks', 'riskDistribution'
+            'kategoriData', 'trenSerangan', 'recentAttacks', 'riskDistribution',
+            'networkInfo'
         ));
     }
 
     public function liveTraffic()
     {
-        $logs = AttackLog::latest()->take(15)->get();
-        return view('adminjaringan.traffic', compact('logs'));
+        $scanner = app(NetworkScanner::class);
+        $devices = $scanner->scanNetwork();
+        $networkInfo = $scanner->getNetworkInfo();
+        $logs = AttackLog::latest()->take(20)->get();
+
+        $traffic = $this->buildTrafficList($devices, $logs);
+
+        return view('adminjaringan.traffic', compact('traffic', 'networkInfo'));
+    }
+
+    public function liveTrafficAjax()
+    {
+        $scanner = app(NetworkScanner::class);
+        $devices = $scanner->scanNetwork();
+        $networkInfo = $scanner->getNetworkInfo();
+        $logs = AttackLog::latest()->take(30)->get();
+
+        $traffic = $this->buildTrafficList($devices, $logs);
+
+        return response()->json([
+            'traffic' => $traffic,
+            'network_info' => $networkInfo,
+            'attack_count' => AttackLog::count(),
+            'device_count' => count($devices),
+            'new_today' => AttackLog::whereDate('created_at', today())->count(),
+        ]);
+    }
+
+    protected function buildTrafficList(array $devices, $logs): array
+    {
+        $result = [];
+
+        foreach ($devices as $device) {
+            $hasAttack = $logs->firstWhere('ip_address', $device['ip']);
+
+            if ($hasAttack) {
+                $result[] = [
+                    'time' => $hasAttack->created_at->format('H:i:s'),
+                    'ip_address' => $hasAttack->ip_address,
+                    'endpoint' => $hasAttack->endpoint,
+                    'kategori' => $hasAttack->kategori,
+                    'risk_level' => $hasAttack->risk_level,
+                    'action_taken' => $hasAttack->action_taken,
+                    'origin' => $device['type'],
+                    'mac' => $device['mac'],
+                    'type' => 'attack',
+                ];
+            } else {
+                $result[] = [
+                    'time' => now()->format('H:i:s'),
+                    'ip_address' => $device['ip'],
+                    'endpoint' => '-',
+                    'kategori' => 'Normal Traffic',
+                    'risk_level' => '-',
+                    'action_taken' => 'Allowed',
+                    'origin' => $device['type'],
+                    'mac' => $device['mac'],
+                    'type' => 'normal',
+                ];
+            }
+        }
+
+        foreach ($logs as $log) {
+            $exists = collect($result)->firstWhere('ip_address', $log->ip_address);
+            if (!$exists) {
+                $result[] = [
+                    'time' => $log->created_at->format('H:i:s'),
+                    'ip_address' => $log->ip_address,
+                    'endpoint' => $log->endpoint,
+                    'kategori' => $log->kategori,
+                    'risk_level' => $log->risk_level,
+                    'action_taken' => $log->action_taken,
+                    'origin' => $log->origin ?? 'External',
+                    'mac' => '-',
+                    'type' => 'attack',
+                ];
+            }
+        }
+
+        usort($result, function ($a, $b) {
+            if ($a['type'] === 'attack' && $b['type'] !== 'attack') return -1;
+            if ($a['type'] !== 'attack' && $b['type'] === 'attack') return 1;
+            return 0;
+        });
+
+        return $result;
     }
 
     public function logIntrusi()
@@ -75,12 +163,95 @@ class AdminJaringanController extends Controller
             'reason' => $request->reason,
         ]);
 
-        AttackLog::where('ip_address', $request->ip_address)
-                  ->update(['action_taken' => 'Blocked']);
+        \Illuminate\Support\Facades\Cache::forget('ids_blocked_ips');
+
+        if (in_array($request->action_type, ['block', 'drop'])) {
+            AttackLog::where('ip_address', $request->ip_address)
+                      ->where('action_taken', '!=', 'Blocked')
+                      ->update(['action_taken' => 'Blocked']);
+        }
 
         return back()->with('success', "IP {$request->ip_address} berhasil diproses dengan tindakan: {$request->action_type}");
     }
 
+    public function networkScan()
+    {
+        $scanner = app(NetworkScanner::class);
+        $devices = $scanner->fullScan();
+        $networkInfo = $scanner->getNetworkInfo();
+
+        return view('adminjaringan.network', compact('devices', 'networkInfo'));
+    }
+
+    public function networkScanAjax()
+    {
+        $scanner = app(NetworkScanner::class);
+        $devices = $scanner->fullScan();
+        $networkInfo = $scanner->getNetworkInfo();
+
+        return response()->json([
+            'devices' => $devices,
+            'network_info' => $networkInfo,
+            'total_devices' => count($devices),
+            'active_devices' => collect($devices)->where('status', 'active')->count(),
+        ]);
+    }
+
+    // ==========================================
+    // RESET DATA & TEST REAL-TIME
+    // ==========================================
+    public function resetData()
+    {
+        AttackLog::truncate();
+        ManualAction::truncate();
+        \Illuminate\Support\Facades\Cache::forget('ids_rules');
+        \Illuminate\Support\Facades\Cache::forget('network_scan_results');
+
+        return back()->with('success', 'Semua data attack log & manual action berhasil direset. Sistem siap mendeteksi serangan real-time.');
+    }
+
+    public function testAttack()
+    {
+        $detector = app(\App\Services\AttackDetector::class);
+
+        $testPatterns = [
+            ['url' => '?q=<script>alert("XSS")</script>', 'desc' => 'XSS Attack'],
+            ['url' => '?search=UNION+SELECT+*+FROM+users', 'desc' => 'SQL Injection'],
+            ['url' => '?file=../../../etc/passwd', 'desc' => 'Path Traversal'],
+            ['url' => '?cmd=cmd.exe+/c+dir', 'desc' => 'Remote Command Execution'],
+            ['url' => '?input=eval(base64_decode("test"))', 'desc' => 'Code Injection'],
+        ];
+
+        $pattern = $testPatterns[array_rand($testPatterns)];
+
+        $request = \Illuminate\Http\Request::create(
+            '/test-attack' . $pattern['url'],
+            'GET',
+            ['q' => str_replace('?q=', '', $pattern['url'])]
+        );
+
+        $attackData = $detector->inspect($request);
+        if ($attackData) {
+            $detector->logAttack($attackData);
+            return response()->json([
+                'success' => true,
+                'message' => "Real-time detection berhasil! {$pattern['desc']} terdeteksi.",
+                'data' => [
+                    'ip' => $attackData['ip_address'],
+                    'kategori' => $attackData['kategori'],
+                    'pola' => $attackData['pola_terdeteksi'],
+                    'risk' => $attackData['risk_level'],
+                    'action' => $attackData['action_taken'],
+                ]
+            ]);
+        }
+
+        return response()->json(['success' => false, 'message' => 'Tidak ada serangan terdeteksi.']);
+    }
+
+    // ==========================================
+    // LAPORAN UTAMA
+    // ==========================================
     public function laporanMenu()
     {
         return view('adminjaringan.laporan');
@@ -88,26 +259,74 @@ class AdminJaringanController extends Controller
 
     public function cetakLaporan($tipe)
     {
-        $query = AttackLog::query();
         $admin = auth()->user()->name;
 
         switch ($tipe) {
-            case 'all': $title = "Seluruh Log Intrusi Jaringan"; break;
-            case 'sqli': $query->where('kategori', 'SQL Injection'); $title = "Laporan Serangan SQL Injection"; break;
-            case 'xss': $query->where('kategori', 'XSS Attack'); $title = "Laporan Serangan XSS"; break;
-            case 'blocked': $query->whereIn('action_taken', ['Blocked', 'Dropped']); $title = "Daftar IP Terblokir"; break;
-            case 'critical': $query->where('risk_level', 'Critical'); $title = "Laporan Ancaman Critical"; break;
             case 'manual':
                 $logs = ManualAction::latest()->get();
                 $title = "Laporan Intervensi Admin Manual";
-                return Pdf::loadView('adminjaringan.pdf_laporan', compact('logs', 'title', 'admin'))->setPaper('a4', 'landscape')->stream();
-            case 'normal': $query->where('action_taken', 'Allowed'); $title = "Laporan Trafik Normal"; break;
-            case 'today': $query->whereDate('created_at', Carbon::today()); $title = "Laporan Aktivitas Hari Ini"; break;
+                $totalData = $logs->count();
+
+                $mappedLogs = $logs->map(function ($action) {
+                    return (object) [
+                        'id' => $action->id,
+                        'created_at' => $action->created_at,
+                        'ip_address' => $action->ip_address,
+                        'kategori' => 'Manual Action',
+                        'pola_terdeteksi' => '-',
+                        'endpoint' => '-',
+                        'origin' => 'Admin',
+                        'risk_level' => '-',
+                        'action_taken' => strtoupper($action->action_type),
+                        'deskripsi' => $action->reason,
+                    ];
+                });
+
+                return Pdf::loadView('adminjaringan.pdf_laporan', [
+                    'logs' => $mappedLogs,
+                    'title' => $title,
+                    'admin' => $admin,
+                    'totalData' => $totalData,
+                    'totalKategori' => collect(['Manual Action' => $totalData]),
+                    'totalRisk' => collect(),
+                    'tipe' => $tipe,
+                ])->setPaper('a4', 'landscape')->stream();
+
+            case 'all':
+                $query = AttackLog::query();
+                $title = "Seluruh Log Intrusi Jaringan";
+                break;
+            case 'sqli':
+                $query = AttackLog::where('kategori', 'SQL Injection');
+                $title = "Laporan Serangan SQL Injection";
+                break;
+            case 'xss':
+                $query = AttackLog::where('kategori', 'XSS');
+                $title = "Laporan Serangan XSS";
+                break;
+            case 'blocked':
+                $query = AttackLog::whereIn('action_taken', ['Blocked', 'Dropped']);
+                $title = "Daftar IP Terblokir";
+                break;
+            case 'critical':
+                $query = AttackLog::where('risk_level', 'Critical');
+                $title = "Laporan Ancaman Critical";
+                break;
+            case 'normal':
+                $query = AttackLog::where('action_taken', 'Allowed');
+                $title = "Laporan Trafik Normal";
+                break;
+            case 'today':
+                $query = AttackLog::whereDate('created_at', Carbon::today());
+                $title = "Laporan Aktivitas Hari Ini";
+                break;
+            default:
+                $query = AttackLog::query();
+                $title = "Laporan Keamanan Jaringan";
+                break;
         }
 
         $logs = $query->latest()->get();
-
-        // Hitung metadata untuk proses laporan
         $totalData = $logs->count();
         $totalKategori = $logs->groupBy('kategori')->map->count();
         $totalRisk = $logs->groupBy('risk_level')->map->count();
@@ -121,7 +340,6 @@ class AdminJaringanController extends Controller
     // ==========================================
     public function laporanAnalitik()
     {
-        // Statistik per kategori (total keseluruhan)
         $statKategori = AttackLog::select('kategori', DB::raw('count(*) as total'))
             ->groupBy('kategori')
             ->orderByDesc('total')
@@ -129,30 +347,25 @@ class AdminJaringanController extends Controller
 
         $totalSerangan = AttackLog::count();
 
-        // Tambahkan persentase
         $statKategori = $statKategori->map(function ($item) use ($totalSerangan) {
             $item->persentase = $totalSerangan > 0 ? round(($item->total / $totalSerangan) * 100, 1) : 0;
             return $item;
         });
 
-        // Kategori paling dominan
         $dominant = $statKategori->first();
 
-        // Statistik harian (7 hari terakhir)
         $harian = AttackLog::select(DB::raw('DATE(created_at) as date'), 'kategori', DB::raw('count(*) as total'))
             ->where('created_at', '>=', now()->subDays(6))
             ->groupBy('date', 'kategori')
             ->orderBy('date')
             ->get();
 
-        // Statistik bulanan (12 bulan terakhir)
         $bulanan = AttackLog::select(DB::raw("DATE_FORMAT(created_at, '%Y-%m') as bulan"), 'kategori', DB::raw('count(*) as total'))
             ->where('created_at', '>=', now()->subMonths(11)->startOfMonth())
             ->groupBy('bulan', 'kategori')
             ->orderBy('bulan')
             ->get();
 
-        // Trend risk level
         $trendRisk = AttackLog::select('risk_level', DB::raw('count(*) as total'))
             ->groupBy('risk_level')
             ->orderByDesc('total')
@@ -199,7 +412,6 @@ class AdminJaringanController extends Controller
     // ==========================================
     public function logPenanganan()
     {
-        // Gabungkan AttackLog + ManualAction untuk riwayat penanganan
         $attackLogs = AttackLog::latest()->take(50)->get()->map(function ($log) {
             return [
                 'id' => $log->id,
@@ -232,10 +444,8 @@ class AdminJaringanController extends Controller
             ];
         });
 
-        // Gabung dan urutkan berdasarkan waktu
         $semuaLog = collect($attackLogs)->merge($manualLogs)->sortByDesc('waktu');
 
-        // Statistik ringkasan
         $totalOtomatis = AttackLog::count();
         $totalManual = ManualAction::count();
         $totalBlocked = AttackLog::whereIn('action_taken', ['Blocked', 'Dropped'])->count();
@@ -288,7 +498,6 @@ class AdminJaringanController extends Controller
         $totalSerangan = AttackLog::count();
         $totalBlocked = AttackLog::whereIn('action_taken', ['Blocked', 'Dropped'])->count();
 
-        // Hitung rentang waktu data
         $firstLog = AttackLog::oldest()->first();
         $lastLog = AttackLog::latest()->first();
 
@@ -305,19 +514,16 @@ class AdminJaringanController extends Controller
             $availabilityPercent = 100;
         }
 
-        // Data harian untuk chart
         $harian = AttackLog::select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as total'))
             ->groupBy('date')
             ->orderBy('date')
             ->get();
 
-        // Data distribusi jam sibuk serangan
         $jamSerangan = AttackLog::select(DB::raw('HOUR(created_at) as jam'), DB::raw('count(*) as total'))
             ->groupBy('jam')
             ->orderBy('jam')
             ->get();
 
-        // Rata-rata serangan per hari
         $avgPerHari = $totalHari > 0 ? round($totalSerangan / $totalHari, 1) : 0;
 
         $lastLogTime = $lastLog ? $lastLog->created_at : now();

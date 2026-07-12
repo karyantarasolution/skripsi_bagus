@@ -141,6 +141,7 @@ class SuperAdminController extends Controller
         ]);
 
         Rule::create($request->all());
+        \Illuminate\Support\Facades\Cache::forget('ids_rules');
         return redirect()->route('superadmin.rules')->with('success', 'Rule baru berhasil ditambahkan.');
     }
 
@@ -158,12 +159,14 @@ class SuperAdminController extends Controller
         ]);
 
         $rule->update($request->all());
+        \Illuminate\Support\Facades\Cache::forget('ids_rules');
         return redirect()->route('superadmin.rules')->with('success', 'Rule berhasil diperbarui.');
     }
 
     public function destroyRule(Rule $rule)
     {
         $rule->delete();
+        \Illuminate\Support\Facades\Cache::forget('ids_rules');
         return redirect()->route('superadmin.rules')->with('success', 'Rule berhasil dihapus.');
     }
 

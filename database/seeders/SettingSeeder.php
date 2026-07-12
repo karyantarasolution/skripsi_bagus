@@ -50,6 +50,14 @@ class SettingSeeder extends Seeder
                 'key' => 'slack_webhook',
                 'value' => '',
             ],
+            [
+                'key' => 'ids_status',
+                'value' => 'active',
+            ],
+            [
+                'key' => 'whitelist',
+                'value' => '127.0.0.1,::1',
+            ],
         ];
 
         foreach ($settings as $setting) {

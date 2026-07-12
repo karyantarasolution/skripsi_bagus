@@ -9,5 +9,10 @@ class AttackLog extends Model
 {
     use HasFactory;
 
-    protected $guarded = []; 
+    protected $guarded = [];
+
+    protected $casts = [
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
+    ];
 }

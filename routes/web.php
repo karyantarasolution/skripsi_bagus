@@ -49,10 +49,17 @@ Route::middleware(['auth', 'role:super_admin'])->prefix('superadmin')->name('sup
 Route::middleware(['auth', 'role:admin_jaringan'])->prefix('adminjaringan')->name('adminjaringan.')->group(function () {
     Route::get('/dashboard', [AdminJaringanController::class, 'dashboard'])->name('dashboard');
     Route::get('/live-traffic', [AdminJaringanController::class, 'liveTraffic'])->name('traffic');
+    Route::get('/live-traffic/ajax', [AdminJaringanController::class, 'liveTrafficAjax'])->name('traffic.ajax');
     Route::get('/log-intrusi', [AdminJaringanController::class, 'logIntrusi'])->name('log');
 
     Route::get('/action', [AdminJaringanController::class, 'action'])->name('action');
     Route::post('/action/process', [AdminJaringanController::class, 'processAction'])->name('action.process');
+
+    Route::get('/network-scan', [AdminJaringanController::class, 'networkScan'])->name('network.scan');
+    Route::get('/network-scan/ajax', [AdminJaringanController::class, 'networkScanAjax'])->name('network.scan.ajax');
+
+    Route::post('/reset-data', [AdminJaringanController::class, 'resetData'])->name('reset.data');
+    Route::post('/test-attack', [AdminJaringanController::class, 'testAttack'])->name('test.attack');
 
     // Laporan utama
     Route::get('/laporan', [AdminJaringanController::class, 'laporanMenu'])->name('laporan');
